@@ -39,6 +39,7 @@ int brightness = 0;
 //it will be in the correct locked/ unlocked state
 uint8_t unLocked;
 bool currentButtonState;
+String friendlyDoorState = "";
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);	// Create MFRC522 instance.
 
@@ -64,8 +65,10 @@ void setup() {
 	digitalWrite(LED_PIN, HIGH);
 	
 	Particle.function("execCommand", execCommand);
+	Particle.variable("doorstatus", friendlyDoorState);
 	
-	Particle.subscribe("hook-response/AMSProxy", proxyResponse, MY_DEVICES);
+	//Particle.subscribe("hook-response/AMSProxy", proxyResponse, MY_DEVICES);
+	Particle.subscribe("hook-response/amsProxyV2", proxyResponseV2, MY_DEVICES);
 	
 	
 	pinMode(RED, OUTPUT);
@@ -98,12 +101,17 @@ void setup() {
 	
 	if(digitalRead(UNLOCK_PIN) == HIGH){
 	    Particle.publish("postToToolLog", "RFID reader booted up and the makerspace door is unlocked.", PRIVATE);
+	    Particle.publish("postToAMSApp", "{  \"userId\": \"Reader\", \"eventName\": \"RFID reader booted up and the makerspace door is unlocked.\"}", PRIVATE);
 	} else {
 	    Particle.publish("postToToolLog", "RFID reader booted up and the makerspace door is locked.", PRIVATE);
+	    Particle.publish("postToAMSApp", "{  \"userId\": \"Reader\", \"eventName\": \"RFID reader booted up and the makerspace door is locked.\"}", PRIVATE);
 	}
 }
 
+
+
 void loop() {
+    
     
     if(((digitalRead(UNLOCK_PIN) == HIGH) && currentButtonState == false) || ((digitalRead(UNLOCK_PIN) == LOW) && currentButtonState == true)){
         unLocked = !unLocked;
@@ -119,9 +127,11 @@ void loop() {
     if(unLocked){
         digitalWrite(DEVICE_PIN, HIGH);
         digitalWrite(LED_PIN, HIGH);
+        friendlyDoorState = "UNLOCKED";
     } else {
         digitalWrite(DEVICE_PIN, LOW);
         digitalWrite(LED_PIN, LOW);  
+        friendlyDoorState = "LOCKED";
     }
     
     
@@ -184,13 +194,14 @@ void cardWasRead(MFRC522 mfrc522){
     }
     currentRFID = rfid;
     
-    Particle.publish("AMSProxy", "{  \"rfid\": \"" + currentRFID + "\"}", PRIVATE);
+    //Particle.publish("AMSProxy", "{  \"rfid\": \"" + currentRFID + "\"}", PRIVATE);
+    Particle.publish("amsProxyV2", "{  \"rfid\": \"" + currentRFID + "\"}", PRIVATE);
    
     delay(5000);  //debounce
 }
 
 
-
+/*
 void proxyResponse(const char * event, const char * data){
     digitalWrite(LED_PIN, LOW);
     
@@ -211,11 +222,77 @@ void proxyResponse(const char * event, const char * data){
         name = strtok(NULL, "~");
         
         if(email != NULL && name != NULL){
-            triggerDevice(name, email);
+            triggerDevice(name, email, false);
         } else {
             Particle.publish("postToRfidReads", currentRFID , PRIVATE);
             Particle.publish("makerspaceNotFound(null pointers)", currentRFID , PRIVATE);
         }
+    }
+    currentRFID = "";
+    
+}
+*/
+
+void proxyResponseV2(const char * event, const char * data){
+    digitalWrite(LED_PIN, LOW);
+    
+    char resp[200];
+    strcpy(resp, String(data).replace("~~", "~NULL~"));
+    
+    
+    
+    
+    Particle.publish("postToToolLog", "(DEBUG) Response from v2 Proxy: " + String(resp), PRIVATE);
+    
+    //is sizeof always going to return 100? in that case we should test for NULL on strtok
+    if((sizeof(resp)/sizeof(char)) < 2){
+        //no result found in response
+        Particle.publish("makerspaceNotFound(empty array)", currentRFID , PRIVATE);
+    } else {
+        //member was found 
+        char *allowed, *billing_status, *cnc, *laser, *message, *name, *orientation, *waiver, *woodworking;
+        char *ptr = NULL;
+        
+        ptr = strtok(resp, "~");  // delimiters space and comma
+        allowed = ptr;
+        ptr = strtok(NULL, "~");
+        billing_status = ptr;
+        ptr = strtok(NULL, "~");
+        cnc = ptr;
+        ptr = strtok(NULL, "~");
+        laser = ptr;
+        ptr = strtok(NULL, "~");
+        message = ptr;
+        ptr = strtok(NULL, "~");
+        name = ptr;
+        ptr = strtok(NULL, "~");
+        orientation = ptr;
+        ptr = strtok(NULL, "~");
+        waiver = ptr;
+        ptr = strtok(NULL, "~");
+        woodworking = ptr;
+        
+        if(String(allowed).equals("true")){
+            triggerDevice(name, "xxx@makeannapolis.org", false);
+        } else {
+            Particle.publish("postToToolLog", String(name) + " not allowed: " + String(message), PRIVATE);
+            Particle.publish("postToRfidReads", currentRFID , PRIVATE);
+            Particle.publish("makerspaceNotFound(null pointers)", currentRFID , PRIVATE);
+        }
+        
+        
+
+        //email = strtok(resp, "~");
+        //name = strtok(NULL, "~");
+        /*
+        if(email != NULL && name != NULL){
+            triggerDevice(name, email, false);
+        } else {
+            Particle.publish("postToRfidReads", currentRFID , PRIVATE);
+            Particle.publish("makerspaceNotFound(null pointers)", currentRFID , PRIVATE);
+        }
+        */
+        
     }
     currentRFID = "";
     
@@ -225,9 +302,12 @@ void proxyResponse(const char * event, const char * data){
 
 
 
-void triggerDevice(char * name, char * email){
+void triggerDevice(char * name, char * email, bool silent){
     
-    Particle.publish("makerspaceSwipe", "{ \"name\": \"" + String(name) + "\", \"email\": \"" + String(email) + "\" }", PRIVATE);
+    if(!silent){
+        Particle.publish("makerspaceSwipe", "{ \"name\": \"" + String(name) + "\", \"email\": \"" + String(email) + "\", \"channel\": \"" + "C6CDR4ER2" + "\", \"deviceName\": \"" + "the makerspace door." + "\" }", PRIVATE);
+        Particle.publish("postToAMSApp", "{  \"userId\": \"" + String(email) + "\", \"displayName\": \"" + String(name) + "\", \"eventName\": \"Activated makerspace door\"}", PRIVATE);
+    }
     bool deviceOn = false;              //can be configured differently depending on device
     if(deviceOn == false){
         
@@ -243,10 +323,26 @@ void triggerDevice(char * name, char * email){
 
  int execCommand(String command)
 {
+    
+    
+    
+  if(command.startsWith("appTriggerDoor"))
+  {
+    String user = command.substring(14);  
+    Particle.publish("postToToolLog", "Door triggered by makerspace app user " + user, PRIVATE);
+    triggerDevice("","", true);
+    return 1; 
+  }
   if(command == "triggerDoor" || command == "TriggerDoor")
   {
     Particle.publish("postToToolLog", "Door triggered by cloud command (triggerDoor).", PRIVATE);
-    triggerDevice("","");
+    triggerDevice("","", true);
+    return 1;
+  }
+  if(command == "debug")
+  {
+    Particle.publish("postToToolLog", "Sending test request to proxy v2 with rfid 123456789123. (debug).", PRIVATE);
+    Particle.publish("amsProxyV2", "{  \"rfid\": \"123456789123\"}", PRIVATE);
     return 1;
   }
   if(command == "reset" || command == "Reset")
@@ -273,11 +369,6 @@ void triggerDevice(char * name, char * email){
   }
   else return -1;
 }      
-
-
-
-
-
 
 
 
